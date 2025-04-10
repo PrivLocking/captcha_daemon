@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear Cookies</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            text-align: center;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        button {
+            padding: 10px 20px;
+            background: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #cc0000;
+        }
+        #status {
+            margin-top: 15px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Clear All Cookies</h1>
+        <p>This will delete all cookies for <strong id="domain"></strong>.</p>
+        <button onclick="deleteAllCookies()">Clear Cookies</button>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // Display the current domain
+        document.getElementById("domain").textContent = window.location.hostname;
+
+        // Function to delete all cookies and storage
+        function deleteAllCookies() {
+            const cookies = document.cookie.split(';');
+            let deletedCount = 0;
+
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                const eqPos = cookie.indexOf('=');
+                const name = eqPos > -1 ? cookie.substring(0, eqPos) : cookie;
+
+                if (name) {
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=${window.location.hostname}`;
+                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=.${window.location.hostname}`;
+                    deletedCount++;
+                }
+            }
+
+            // Clear all storage (added per your decision)
+            localStorage.clear();
+            sessionStorage.clear();
+
+            // Show status message (if not auto-clearing)
+            if (!new URLSearchParams(window.location.search).get('confirm') === 'yes') {
+                const statusEl = document.getElementById("status");
+                if (deletedCount > 0) {
+                    statusEl.textContent = `✅ Deleted ${deletedCount} cookies. Redirecting...`;
+                    statusEl.style.color = "green";
+                } else {
+                    statusEl.textContent = "No cookies found. Redirecting...";
+                    statusEl.style.color = "gray";
+                }
+            }
+
+            // Redirect to root after 2 seconds
+            setTimeout(() => {
+                window.location.href = "/";
+            }, 2000);
+        }
+
+        // Auto-clear if URL has ?confirm=yes
+        if (new URLSearchParams(window.location.search).get('confirm') === 'yes') {
+            deleteAllCookies();
+        }
+    </script>
+
+
+</body>
+</html>
