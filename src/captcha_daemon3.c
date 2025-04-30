@@ -163,8 +163,35 @@ void generate_md5(const char *input, size_t len, char *output) {
     output[32] = '\0';
 }
 
-void generate_captcha(gdImagePtr im, const char *code) {
+int color6pick() {
+    static int pool[6] = {0,1,2,3,4,5};
+    static int count = 0;
+    static int initialized = 0;
+
+    // Initialize on first call
+    if (!initialized) {
+        srand(time(NULL));
+        initialized = 1;
+    }
+
+    // Reshuffle when needed
+    if (count % 6 == 0) {
+        // Fisher-Yates shuffle
+        for (int i = 5; i > 0; i--) {
+            int j = rand() % (i + 1);
+            int temp = pool[i];
+            pool[i] = pool[j];
+            pool[j] = temp;
+        }
+    }
+
+    // Return next number in sequence
+    return pool[count++ % 6];
+}
+
+void generate_captcha(gdImagePtr im, char *session_id, const char *code) {
     int bg = gdImageColorAllocate(im, 200, 255, 255);
+    int fg = gdImageColorAllocate(im, 100, 100, 100);
     int colors[6] = {
         gdImageColorAllocate(im, 255, 0, 0),
         gdImageColorAllocate(im, 0, 255, 0),
@@ -186,11 +213,28 @@ void generate_captcha(gdImagePtr im, const char *code) {
     int font_size = 64;
     char *err;
     for (int i = 0; i < 6; i++) {
+        int colorIdx = color6pick();
         int y_offset = rand() % 70 - 10;
         char text[2] = {code[i], '\0'};
-        err = gdImageStringFT(im, NULL, colors[i], font, font_size, 0.0, x, 100 + y_offset, text);
-        if (err) gdImageChar(im, gdFontGetGiant(), x, 70 + y_offset, code[i], colors[i]);
+        err = gdImageStringFT(im, NULL, colors[colorIdx], font, font_size, 0.0, x, 100 + y_offset, text);
+        if (err) gdImageChar(im, gdFontGetGiant(), x, 70 + y_offset, code[i], colors[colorIdx]);
         x += 60 + (rand() % 10);
+    }
+    x = 10;
+    for (int i = 0; i < 16; i++) {
+        int y_offset = 15;
+        char text[2] = {session_id[i], '\0'};
+        err = gdImageStringFT(im, NULL, fg, font, 30, 0.0, x,  40 + y_offset, text);
+        if (err) gdImageChar(im, gdFontGetGiant(), x, 70 + y_offset, session_id[i], fg);
+        x += 24 ;
+    }
+    x = 10;
+    for (int i = 16; i < 32; i++) {
+        int y_offset = 15;
+        char text[2] = {session_id[i], '\0'};
+        err = gdImageStringFT(im, NULL, fg, font, 30, 0.0, x, 120 + y_offset, text);
+        if (err) gdImageChar(im, gdFontGetGiant(), x, 70 + y_offset, session_id[i], fg);
+        x += 24 ;
     }
     for (int i = 0; i < 10; i++) {
         int circle_color = gdImageColorAllocateAlpha(im, rand() % 256, rand() % 256, rand() % 256, 64);
@@ -209,14 +253,28 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-R") == 0 && i + 1 < argc) redis_sock = argv[++i];
         else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) auth_ttl = atoi(argv[++i]);
     }
+    if ( 1 && debug_mode ) {
+        printf("\n");
+        for (int j = 0; j < 16; j++) {
+            for (int i = 0; i < 6; i++) {
+                printf("%d ", color6pick() );
+            }
+            printf("\n");
+        }
+        printf("\n");
+    }
     srand(time(NULL) ^ getpid());
     mdctx = EVP_MD_CTX_new();
-    if (!mdctx) return 1;
+    if (!mdctx) {
+        if (debug_mode) printf("EVP_MD_CTX_new error\n");
+        return 1;
+    }
     char urandom[32], init_input[64];
     FILE *urand = fopen("/dev/urandom", "r");
     if (!urand || fread(urandom, 1, 32, urand) != 32) {
         if (urand) fclose(urand);
         if (mdctx) EVP_MD_CTX_free(mdctx);
+        if (debug_mode) printf("/dev/urandom error\n");
         return 1;
     }
     fclose(urand);
@@ -227,12 +285,14 @@ int main(int argc, char *argv[]) {
     int redis_fd = redis_connect();
     if (redis_fd == -1) {
         if (mdctx) EVP_MD_CTX_free(mdctx);
+        if (debug_mode) printf(" redis_connect error\n");
         return 1;
     }
     int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (server_fd == -1) {
         close(redis_fd);
         if (mdctx) EVP_MD_CTX_free(mdctx);
+        if (debug_mode) printf(" socket create error\n");
         return 1;
     }
     struct sockaddr_un addr;
@@ -244,6 +304,7 @@ int main(int argc, char *argv[]) {
         close(server_fd);
         close(redis_fd);
         if (mdctx) EVP_MD_CTX_free(mdctx);
+        if (debug_mode) printf(" server_fd bind error\n");
         return 1;
     }
     chmod(socket_path, 0666);
@@ -251,6 +312,7 @@ int main(int argc, char *argv[]) {
         close(server_fd);
         close(redis_fd);
         if (mdctx) EVP_MD_CTX_free(mdctx);
+        if (debug_mode) printf(" server_fd listen error\n");
         return 1;
     }
     while (1) {
@@ -270,7 +332,7 @@ int main(int argc, char *argv[]) {
                 char *code = redis_hget(redis_fd, redis_key, "code");
                 if (code && strlen(code) > 0) {
                     gdImagePtr im = gdImageCreateTrueColor(WIDTH, HEIGHT);
-                    generate_captcha(im, code);
+                    generate_captcha(im, session_id, code);
                     int size;
                     void *png_data = gdImagePngPtr(im, &size);
                     gdImageDestroy(im);
@@ -279,7 +341,8 @@ int main(int argc, char *argv[]) {
                              "HTTP/1.1 200 OK\r\n"
                              "Content-Type: image/png\r\n"
                              "Content-Length: %d\r\n"
-                             "\r\n", size);
+                             "Set-Cookie: captcha_session=%s; Path=/\r\n"
+                             "\r\n", size, session_id);
                     write(client_fd, header, strlen(header));
                     write(client_fd, png_data, size);
                     gdFree(png_data);
@@ -294,7 +357,7 @@ int main(int argc, char *argv[]) {
             char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             for (int i = 0; i < 6; i++) code[i] = chars[rand() % strlen(chars)];
             code[6] = '\0';
-            generate_captcha(im, code);
+            generate_captcha(im, session_id, code);
             char current_randkey[33];
             strcpy(current_randkey, randkey);
             char session_input[96];
@@ -380,38 +443,46 @@ int main(int argc, char *argv[]) {
                                  "Content-Length: 0\r\n"
                                  "\r\n");
                     } else if (strcasecmp(user_input, stored_code) == 0) {
-                        char *current_randkey = malloc(33);
-                        if (!current_randkey) {
-                            snprintf(response, sizeof(response),
-                                     "HTTP/1.1 500 Internal Server Error\r\n"
-                                     "Content-Length: 0\r\n"
-                                     "\r\n");
+                        char *existing_auth = redis_hget(redis_fd, redis_key, "auth");
+                        char new_auth_token[33];
+                        if (!existing_auth) {
+                            char *current_randkey = malloc(33);
+                            if (!current_randkey) {
+                                snprintf(response, sizeof(response),
+                                         "HTTP/1.1 500 Internal Server Error\r\n"
+                                         "Content-Length: 0\r\n"
+                                         "\r\n");
+                            } else {
+                                strcpy(current_randkey, randkey);
+                                char auth_input[72];
+                                memcpy(auth_input, current_randkey, 32);
+                                memcpy(auth_input + 32, sess, 32);
+                                memcpy(auth_input + 64, &ts, sizeof(ts));
+                                generate_md5(auth_input, 64 + sizeof(ts), new_auth_token);
+                                redis_hset(redis_fd, redis_key, "auth", new_auth_token);
+                                free(current_randkey);
+                            }
                         } else {
-                            strcpy(current_randkey, randkey);
-                            char auth_input[72], new_auth_token[33];
-                            memcpy(auth_input, current_randkey, 32);
-                            memcpy(auth_input + 32, sess, 32);
-                            memcpy(auth_input + 64, &ts, sizeof(ts));
-                            generate_md5(auth_input, 64 + sizeof(ts), new_auth_token);
-                            redis_hset(redis_fd, redis_key, "auth", new_auth_token);
-                            redis_set_ttl(redis_fd, redis_key, auth_ttl);
-                            char cmd[256], buffer[1024];
-                            snprintf(cmd, sizeof(cmd), "DEL %s\r\n", fails_key);
-                            redis_command(redis_fd, cmd, buffer, sizeof(buffer));
-                            snprintf(response, sizeof(response),
-                                     "HTTP/1.1 302 Found\r\n"
-                                     "Location: %s\r\n"
-                                     "Set-Cookie: captcha_auth=%s; Path=/; Max-Age=%d\r\n"
-                                     "\r\n",
-                                     origin_url, new_auth_token, auth_ttl);
-                            if (debug_mode) printf(
-                                     "HTTP/1.1 302 Found\r\n"
-                                     "Location: %s\r\n"
-                                     "Set-Cookie: captcha_auth=%s; Path=/; Max-Age=%d\r\n"
-                                     "\r\n",
-                                     origin_url, new_auth_token, auth_ttl);
+                            strncpy(new_auth_token, existing_auth, sizeof(new_auth_token));
+                            new_auth_token[32] = '\0';
+                            free(existing_auth);
                         }
-                        free(current_randkey);
+                        redis_set_ttl(redis_fd, redis_key, auth_ttl);
+                        char cmd[256], buffer[1024];
+                        snprintf(cmd, sizeof(cmd), "DEL %s\r\n", fails_key);
+                        redis_command(redis_fd, cmd, buffer, sizeof(buffer));
+                        snprintf(response, sizeof(response),
+                                 "HTTP/1.1 302 Found\r\n"
+                                 "Location: %s\r\n"
+                                 "Set-Cookie: captcha_auth=%s; Path=/; Max-Age=%d\r\n"
+                                 "\r\n",
+                                 origin_url, new_auth_token, auth_ttl);
+                        if (debug_mode) printf(
+                                 "HTTP/1.1 302 Found\r\n"
+                                 "Location: %s\r\n"
+                                 "Set-Cookie: captcha_auth=%s; Path=/; Max-Age=%d\r\n"
+                                 "\r\n",
+                                 origin_url, new_auth_token, auth_ttl);
                     } else {
                         char cmd[256], buffer[1024];
                         snprintf(cmd, sizeof(cmd), "ZADD %s %ld %ld\r\n", fails_key, ts, ts);
@@ -436,9 +507,9 @@ int main(int argc, char *argv[]) {
             }
             write(client_fd, response, strlen(response));
         } else if (strstr(request, "GET /captcha_check")) {
-            char *failed_param = strstr(request, "failed=");
-            char *cookie = strstr(request, "Cookie: ");
+            char *cookie = strcasestr(request, "Cookie: ");
             char sess[33] = {0}, auth_token[33] = {0}, failed_url[256] = "/captcha_html.html";
+            char *failed_param = strstr(request, "failed=");
             if (failed_param) {
                 failed_param += 7;
                 char *end = strstr(failed_param, " ");
@@ -452,14 +523,23 @@ int main(int argc, char *argv[]) {
                 char *auth = strstr(cookie, "captcha_auth=");
                 if (session) sscanf(session, "captcha_session=%32s", sess);
                 if (auth) sscanf(auth, "captcha_auth=%32s", auth_token);
+                if (debug_mode) printf("Parsed session: [%s], auth_token: [%s]\n", sess, auth_token);
             }
             char response[512];
             if (sess[0] && auth_token[0]) {
                 char redis_key[48];
                 snprintf(redis_key, sizeof(redis_key), "captcha:%s", sess);
                 char *stored_auth = redis_hget(redis_fd, redis_key, "auth");
+                if (debug_mode) printf("Redis stored_auth: [%s]\n", stored_auth ? stored_auth : "NULL");
                 if (stored_auth && strcmp(stored_auth, auth_token) == 0) {
                     snprintf(response, sizeof(response),
+                             "HTTP/1.1 200 OK\r\n"
+                             "Content-Type: text/plain\r\n"
+                             "Cache-Control: no-cache, no-store\r\n"
+                             "Content-Length: 2\r\n"
+                             "\r\n"
+                             "OK");
+                    if (debug_mode) printf(
                              "HTTP/1.1 200 OK\r\n"
                              "Content-Type: text/plain\r\n"
                              "Cache-Control: no-cache, no-store\r\n"
@@ -472,10 +552,20 @@ int main(int argc, char *argv[]) {
                              "Location: %s\r\n"
                              "\r\n",
                              failed_url);
+                    if (debug_mode) printf(
+                             "HTTP/1.1 302 Found\r\n"
+                             "Location: %s\r\n"
+                             "\r\n",
+                             failed_url);
                 }
                 if (stored_auth) free(stored_auth);
             } else {
                 snprintf(response, sizeof(response),
+                         "HTTP/1.1 302 Found\r\n"
+                         "Location: %s\r\n"
+                         "\r\n",
+                         failed_url);
+                if (debug_mode) printf(
                          "HTTP/1.1 302 Found\r\n"
                          "Location: %s\r\n"
                          "\r\n",
