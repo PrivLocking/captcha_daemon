@@ -1,4 +1,4 @@
-# redis static
+# captcha daemon
 
 a chaptcha daemon written in pure C code.
 it must work with redis database

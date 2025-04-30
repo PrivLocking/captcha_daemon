@@ -66,7 +66,7 @@ int redis_connect() {
         close(fd);
         return -1;
     }
-    char *passwd = getenv("REDIS_PASSWD");
+    char *passwd = getenv("REDISCLI_AUTH");
     if (!passwd) passwd = "default_password";
     char auth_cmd[256], buffer[1024];
     snprintf(auth_cmd, sizeof(auth_cmd), "AUTH %s\r\n", passwd);
